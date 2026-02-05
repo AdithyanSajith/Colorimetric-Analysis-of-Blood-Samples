@@ -1,26 +1,34 @@
 import axios from "axios";
+import * as ImageManipulator from "expo-image-manipulator";
+
+// Get backend URL from environment or use default
+// For iOS/Android apps, use the machine's IP address instead of localhost
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL || "http://10.1.28.38:8001";
 
 const API = axios.create({
-  baseURL: "http://10.79.195.109:8000", // ⚠️ USE YOUR PC IP
+  baseURL: BACKEND_URL,
   timeout: 30000,
 });
 
 export async function analyzeImageColors(imageUri) {
   try {
-    console.log("📤 Sending RAW image to backend:", imageUri);
+    const manipulated = await ImageManipulator.manipulateAsync(
+      imageUri,
+      [],
+      { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+    );
+    const uploadUri = manipulated.uri;
+
+    console.log("📤 Sending RAW image to backend:", uploadUri);
 
     const formData = new FormData();
     formData.append("file", {
-      uri: imageUri,
+      uri: uploadUri,
       name: "image.jpg",
       type: "image/jpeg",
     });
 
-    const response = await API.post("/analyze", formData, {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
-    });
+    const response = await API.post("/analyze", formData);
 
     console.log("✅ Backend response received:", response.data);
     return response.data;

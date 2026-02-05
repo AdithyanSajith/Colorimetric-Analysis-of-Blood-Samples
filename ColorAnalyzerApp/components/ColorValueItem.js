@@ -25,8 +25,7 @@ export default function ColorValueItem({ label, value, color, onCopy, delay = 0 
     }, delay);
 
     return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [delay]);
+  }, [delay, itemAnim, itemTranslateY]);
 
   const handlePress = () => {
     if (onCopy) {

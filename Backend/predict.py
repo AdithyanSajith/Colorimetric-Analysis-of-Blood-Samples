@@ -1,9 +1,11 @@
 import joblib
 import numpy as np
+import os
 
-# Load trained calibration models
-poly = joblib.load("calibration_poly.pkl")
-model = joblib.load("calibration_model.pkl")
+# Load trained calibration models with proper path handling
+script_dir = os.path.dirname(os.path.abspath(__file__))
+poly = joblib.load(os.path.join(script_dir, "calibration_poly.pkl"))
+model = joblib.load(os.path.join(script_dir, "calibration_model.pkl"))
 
 def predict_concentrations(features):
     """

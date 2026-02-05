@@ -1,10 +1,12 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import tempfile
 import cv2
 import numpy as np
 from typing import List, Dict, Any
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+import warnings
+warnings.filterwarnings('ignore')
 
 app = FastAPI(title="Color Strip Analyzer")
 
@@ -51,15 +53,9 @@ def rgb_to_hsv_np(r: np.ndarray, g: np.ndarray, b: np.ndarray):
 
 def analyze_strip_image(img_bgr: np.ndarray) -> Dict[str, Any]:
     """
-    Approximate the N.html workflow:
-    - convert to HSV
-    - threshold saturation/value to isolate colored pads
-    - find circular blobs left-to-right
-    - measure mean saturation per blob
-    - map to fixed concentration list
-    - fit simple polynomial curve and return data for graph.
+    Analyze color strip image and extract RGB values for each pad.
+    Returns polynomial fits and predictions for RGB channels.
     """
-    # Parameters similar to N.html
     EXPECTED_COLS = 11
     CONCENTRATIONS = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     SAT_THRESH = 35
@@ -75,16 +71,16 @@ def analyze_strip_image(img_bgr: np.ndarray) -> Dict[str, Any]:
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     H, S, V = cv2.split(hsv)
 
-    # Threshold on S and V (similar to mask_from_hsv in N.html)
+    # Threshold on S and V
     mask = ((S > SAT_THRESH) & (V > VAL_THRESH)).astype("uint8") * 255
 
-    # Morphological clean (approximation of morphological_clean)
+    # Morphological operations
     ko = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     kc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     mask_open = cv2.morphologyEx(mask, cv2.MORPH_OPEN, ko, iterations=1)
     mask_clean = cv2.morphologyEx(mask_open, cv2.MORPH_CLOSE, kc, iterations=1)
 
-    # Find contours / blobs (similar to contours_from_mask + contours_to_circles)
+    # Find contours
     cnts, _ = cv2.findContours(mask_clean.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     blobs = []
@@ -103,80 +99,123 @@ def analyze_strip_image(img_bgr: np.ndarray) -> Dict[str, Any]:
     if not blobs:
         raise ValueError("No valid color pads detected on the strip.")
 
-    # Sort left-to-right and keep EXPECTED_COLS nearest to center row
+    # Sort left-to-right
     blobs = sorted(blobs, key=lambda b: b[0])
     if len(blobs) > EXPECTED_COLS:
-        # Choose the ones closest to the median y to avoid spurious detections
         ys = np.array([b[1] for b in blobs], dtype=float)
         median_y = np.median(ys)
         blobs = sorted(blobs, key=lambda b: abs(b[1] - median_y))[:EXPECTED_COLS]
         blobs = sorted(blobs, key=lambda b: b[0])
 
-    # For each blob, measure mean saturation inside a slightly smaller circle
-    h_img, w_img = S.shape
-    means_s = []
-    centers_x = []
+    # Extract RGB values for each blob
+    h_img, w_img = img_bgr.shape[:2]
+    rgb_data = []
+    
     for (cx, cy, r, area, circ) in blobs:
-        rr = max(1, int(r * 0.72))  # INNER_SCALE like N.html
+        rr = max(1, int(r * 0.72))
         Y, X = np.ogrid[:h_img, :w_img]
         dist2 = (X - cx) ** 2 + (Y - cy) ** 2
         mask_circle = dist2 <= rr * rr
+        
+        # Extract BGR values from the blob
+        b_vals = img_bgr[mask_circle, 0]
+        g_vals = img_bgr[mask_circle, 1]
+        r_vals = img_bgr[mask_circle, 2]
         s_vals = S[mask_circle]
-        if s_vals.size == 0:
-            means_s.append(0.0)
+        
+        if b_vals.size > 0:
+            rgb_data.append({
+                "r_mean": float(np.mean(r_vals)),
+                "g_mean": float(np.mean(g_vals)),
+                "b_mean": float(np.mean(b_vals)),
+                "s_mean": float(np.mean(s_vals)),
+                "r_std": float(np.std(r_vals)),
+                "g_std": float(np.std(g_vals)),
+                "b_std": float(np.std(b_vals)),
+            })
         else:
-            means_s.append(float(np.mean(s_vals)))
-        centers_x.append(cx)
+            rgb_data.append({
+                "r_mean": 0, "g_mean": 0, "b_mean": 0, "s_mean": 0,
+                "r_std": 0, "g_std": 0, "b_std": 0
+            })
 
-    means_s = np.array(means_s, dtype=float)
-    centers_x = np.array(centers_x, dtype=float)
+    # Truncate or pad to EXPECTED_COLS
+    if len(rgb_data) > EXPECTED_COLS:
+        rgb_data = rgb_data[:EXPECTED_COLS]
+    elif len(rgb_data) < EXPECTED_COLS:
+        pad = [{"r_mean": 0, "g_mean": 0, "b_mean": 0, "s_mean": 0, "r_std": 0, "g_std": 0, "b_std": 0}] * (EXPECTED_COLS - len(rgb_data))
+        rgb_data.extend(pad)
 
-    # Sort by x coordinate to align with increasing concentration
-    order = np.argsort(centers_x)
-    means_s = means_s[order]
-
-    # Truncate or pad to length of EXPECTED_COLS/CONCENTRATIONS
-    if len(means_s) > EXPECTED_COLS:
-        means_s = means_s[:EXPECTED_COLS]
-    elif len(means_s) < EXPECTED_COLS:
-        # simple padding with NaN to show missing wells
-        pad = np.full(EXPECTED_COLS - len(means_s), np.nan)
-        means_s = np.concatenate([means_s, pad])
-
+    # Extract individual channel arrays
     x = np.array(CONCENTRATIONS, dtype=float)
-    y = means_s
+    r_values = np.array([d["r_mean"] for d in rgb_data], dtype=float)
+    g_values = np.array([d["g_mean"] for d in rgb_data], dtype=float)
+    b_values = np.array([d["b_mean"] for d in rgb_data], dtype=float)
+    rgb_mean = (r_values + g_values + b_values) / 3.0
+    s_values = np.array([d["s_mean"] for d in rgb_data], dtype=float)
 
-    # Filter out NaNs for fitting
-    valid = ~np.isnan(y)
-    if np.count_nonzero(valid) >= 2:
-        # Fit simple linear regression (degree 1) as a baseline
-        coeffs = np.polyfit(x[valid], y[valid], deg=1)
+    # Fit polynomials for each channel (degree 2)
+    def fit_and_evaluate(y_vals, x_vals, channel_name):
+        coeffs = np.polyfit(x_vals, y_vals, deg=2)
         poly = np.poly1d(coeffs)
-        x_fit = np.linspace(x.min(), x.max(), 100)
+
+        y_pred = poly(x_vals)
+        r2 = r2_score(y_vals, y_pred)
+        mae = mean_absolute_error(y_vals, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_vals, y_pred))
+
+        x_fit = np.linspace(x_vals.min(), x_vals.max(), 50)
         y_fit = poly(x_fit)
 
-        # R^2
-        y_pred = poly(x[valid])
-        ss_res = np.sum((y[valid] - y_pred) ** 2)
-        ss_tot = np.sum((y[valid] - np.mean(y[valid])) ** 2)
-        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
-    else:
-        x_fit = x
-        y_fit = y
-        r2 = 0.0
+        # Predict concentration from channel value by fitting the inverse mapping.
+        inv_coeffs = np.polyfit(y_vals, x_vals, deg=2)
+        inv_poly = np.poly1d(inv_coeffs)
+        pred_conc = inv_poly(y_vals)
 
-    # Normalize y and y_fit to 0–1 range for convenience (optional)
-    y_norm = (y - np.nanmin(y)) / (np.nanmax(y) - np.nanmin(y)) if np.nanmax(y) > np.nanmin(y) else y
-    y_fit_norm = (y_fit - np.min(y_fit)) / (np.max(y_fit) - np.min(y_fit)) if np.max(y_fit) > np.min(y_fit) else y_fit
+        return {
+            "coeffs": coeffs.tolist(),
+            "inv_coeffs": inv_coeffs.tolist(),
+            "r2": float(r2),
+            "mae": float(mae),
+            "rmse": float(rmse),
+            "fit_x": x_fit.tolist(),
+            "fit_y": y_fit.tolist(),
+            "actual_x": x_vals.tolist(),
+            "actual_y": y_vals.tolist(),
+            "predicted_concentration": np.clip(pred_conc, 0, 10).tolist(),
+        }
+
+    r_fit = fit_and_evaluate(r_values, x, "R")
+    g_fit = fit_and_evaluate(g_values, x, "G")
+    b_fit = fit_and_evaluate(b_values, x, "B")
+    rgb_fit = fit_and_evaluate(rgb_mean, x, "RGB_mean")
 
     return {
-        "concentrations": x.tolist(),
-        "mean_saturation": y.tolist(),
-        "mean_saturation_normalized": y_norm.tolist(),
-        "fit_x": x_fit.tolist(),
-        "fit_y": y_fit.tolist(),
-        "fit_y_normalized": y_fit_norm.tolist(),
-        "r2": float(r2),
+        "color_values": [
+            {
+                "well": i + 1,
+                "concentration": float(CONCENTRATIONS[i]),
+                "r": rgb_data[i]["r_mean"],
+                "g": rgb_data[i]["g_mean"],
+                "b": rgb_data[i]["b_mean"],
+                "rgb_mean": float(rgb_mean[i]),
+                "s_mean": rgb_data[i]["s_mean"],
+                "pred_from_r": float(r_fit["predicted_concentration"][i]),
+                "pred_from_g": float(g_fit["predicted_concentration"][i]),
+                "pred_from_b": float(b_fit["predicted_concentration"][i]),
+                "pred_from_rgb": float(rgb_fit["predicted_concentration"][i]),
+            }
+            for i in range(len(rgb_data))
+        ],
+        "r_channel": r_fit,
+        "g_channel": g_fit,
+        "b_channel": b_fit,
+        "rgb_mean_channel": rgb_fit,
+        "trial_metrics": {
+            "r2": float(r_fit["r2"]),
+            "mae": float(r_fit["mae"]),
+            "rmse": float(r_fit["rmse"]),
+        }
     }
 
 
@@ -187,10 +226,9 @@ async def analyze(file: UploadFile = File(...)):
         if not contents:
             return JSONResponse({"error": "Empty file"}, status_code=400)
 
-        with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
-            tmp.write(contents)
-            tmp.flush()
-            img_bgr = cv2.imread(tmp.name)
+        # Decode image directly from bytes using numpy
+        nparr = np.frombuffer(contents, np.uint8)
+        img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if img_bgr is None:
             return JSONResponse({"error": "Failed to decode image"}, status_code=400)
