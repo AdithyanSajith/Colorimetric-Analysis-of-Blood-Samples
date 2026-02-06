@@ -1,13 +1,16 @@
 import axios from "axios";
 import * as ImageManipulator from "expo-image-manipulator";
 
-// Get backend URL from environment or use default
-// For iOS/Android apps, use the machine's IP address instead of localhost
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL || "http://10.1.21.126:8001";
+// Get backend URL from environment
+// Priority: env var > fallback to local IP
+// For remote access via Expo tunnel, the friend needs to use PUBLIC_BACKEND_URL
+const BACKEND_URL = 
+  process.env.EXPO_PUBLIC_BACKEND_URL ||  // Set this for remote access (e.g., from ngrok)
+  process.env.REACT_APP_BACKEND_URL ||   "http://10.1.28.38:8001";  // Local IP for development
 
 const API = axios.create({
   baseURL: BACKEND_URL,
-  timeout: 120000,  // Increased from 30s to 2 minutes for image processing
+  timeout: 30000,  // Fail faster when backend is unreachable
 });
 
 export async function analyzeImageColors(imageUri) {
