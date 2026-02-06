@@ -38,8 +38,8 @@ def predict_concentrations(features):
             X = poly.transform([[R]])
             concentration = model.predict(X)[0]
             
-            # Round to 2 decimal places for readability
-            trial_predictions.append(round(float(concentration), 2))
+            # Round to 6 decimal places to match notebook precision
+            trial_predictions.append(round(float(concentration), 6))
 
         all_predictions.append({
             "trial": trial_id,

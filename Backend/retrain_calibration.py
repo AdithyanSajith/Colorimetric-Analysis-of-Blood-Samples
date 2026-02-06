@@ -9,20 +9,20 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import os
 
-# Reference data from the calibration table
+# Reference data from the calibration table (matching your analysis)
 # Format: Concentration (g/dL), R value
 reference_data = [
-    (0.5, 164.0951),
-    (1.0, 157.1643),
-    (2.0, 138.6038),
-    (3.0, 132.9423),
-    (4.0, 122.3280),
-    (5.0, 119.8036),
-    (6.0, 120.3674),
-    (7.0, 112.5461),
-    (8.0, 99.9079),
-    (9.0, 96.1239),
-    (10.0, 75.6670),
+    (0.5, 167.529301),
+    (1.0, 159.171289),
+    (2.0, 142.563327),
+    (3.0, 134.866232),
+    (4.0, 123.327478),
+    (5.0, 125.132325),
+    (6.0, 122.401361),
+    (7.0, 115.480151),
+    (8.0, 105.604915),
+    (9.0, 99.060491),
+    (10.0, 73.809074),
 ]
 
 # Extract X (R values) and y (Concentrations)
